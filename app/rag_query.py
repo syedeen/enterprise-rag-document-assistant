@@ -1,72 +1,107 @@
-from sentence_transformers import SentenceTransformer
-import faiss
+
 import requests
-import pickle
 from rank_bm25 import BM25Okapi
 from app.rag_test import embedding_model
-
-
-    
-
+from app.vector_db import client 
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+from sentence_transformers import CrossEncoder
+reranker =  CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+import os
+OLLAMA_URL = os.getenv("OLLAMA_URL")
 def get_results(query , file_name , user_id = None):
 
-    with open("app/faiss/bm25.pkl", "rb") as f:
-        bm25 = pickle.load(f)
-    with open("app/faiss/chunks.pkl","rb") as f:
-        chunks = pickle.load(f)
-    with open("app/faiss/metadata.pkl", "rb") as f:
-        metadata = pickle.load(f)
-
-    index = faiss.read_index("app/faiss/faiss_index.bin")
-    
 
     #query
-    embedding_query = embedding_model.encode([query]) #wrapped in a list cause faiss expects embeddings as a 2d array 
+    embedding_query = embedding_model.encode([query])[0] #wrapped in a list cause faiss expects embeddings as a 2d array 
 
-    #tokenize query
-    tokenized_query = query.lower().split()
-    bm25_scores = bm25.get_scores(tokenized_query)
+    results = client.query_points(
+        collection_name="rag_test",
+        query=embedding_query,
+        query_filter = Filter(
+        must=[
+        FieldCondition(
+            key="user_id",
+            match=MatchValue(value=user_id)
+        )
+    ] 
+),
+        limit=15
+        )
+    
 
-    #search
-    k = 3
-    distances , indices = index.search(embedding_query , k)
-
-    filtered_indices = []
-    for i in indices[0]:
-        if metadata[i]["user_id"] == user_id:
-            if file_name is None or metadata[i]["filename"] == file_name:
-                filtered_indices.append(i)
-
-
-    if not filtered_indices:
+    if not results:
         return {
             "response": "No relevant documents found.",
             "metadata": []
         }
+    
+    retrieved_chunks = []
+    retrieved_metadata = []
+
+    vector_scores = []
+
+    for r in results.points:
+        payload = r.payload
+        if file_name is None or payload["filename"] == file_name:
+            retrieved_chunks.append(payload["chunk"])
+            retrieved_metadata.append(payload)
+            vector_scores.append(r.score)
 
 
-    #semantic scoring 
-
-    sem_map = {
-        idx:1/(1+distances[0][i])
-        for i , idx in enumerate(indices[0])
-    }
-
-    final_scores = []
-    alpha = 0.7 #semantic weight
-    beta = 0.3 #keyword weight
-
-    for i in  filtered_indices:
-        sem_score = sem_map.get(i,0)
-        key_score = bm25_scores[i]
-        final_scores.append((i,sem_score * alpha + key_score * beta))
+    if not retrieved_chunks:
+            return {
+                "response": "No relevant documents found.",
+                "metadata": []
+        }
 
 
+    #bm25_scores
 
-    top_k = sorted(range(len(final_scores)) , key = lambda x :final_scores[x] , reverse=True)[:k]
+    tokenized = [chunk.split() for chunk in retrieved_chunks]
+    bm25_model = BM25Okapi(tokenized)
+    bm25_scores = bm25_model.get_scores(query.split())
 
-    retrieved_chunks = [chunks[i] for i in top_k]
-    retrieved_metadata = [metadata[i] for i in top_k]
+    #normalize
+    max_scores = max(bm25_scores)
+    bm25_scores = bm25_scores / max_scores  if max_scores > 0 else bm25_scores
+
+    # combine vector_scores + bm25-scores 
+
+    max_vector = max(vector_scores) if max(vector_scores) > 0 else 1
+    vector_scores = [v / max_vector for v in vector_scores]
+
+    v_weight = 0.6 
+    b_weight = 0.4
+    hybrid_scores = [
+    v_weight * v + b_weight * b
+    for v, b in zip(vector_scores, bm25_scores)
+]
+
+    hybrid_ranked = sorted(
+         zip(hybrid_scores , retrieved_chunks , retrieved_metadata),
+         key = lambda x : x[0],
+         reverse = True
+    )
+
+    retrieved_chunks = [x[1] for x in hybrid_ranked]
+    retrieved_metadata = [x[2] for x in hybrid_ranked]
+
+    #reranker model 
+
+    
+    scores = reranker.predict([(query , chunk) for chunk in retrieved_chunks])
+    
+    ranked = sorted(
+    zip(scores, retrieved_chunks, retrieved_metadata),
+    key=lambda x: x[0],
+    reverse=True
+)
+    
+    top_k = ranked[:3]
+    retrieved_chunks = [c[1] for c in top_k]
+    retrieved_metadata = [m[2] for m in top_k]
+    
+
 
     context = "\n\n".join(retrieved_chunks)
 
@@ -82,7 +117,7 @@ def get_results(query , file_name , user_id = None):
 
 
     response = requests.post(
-        "http://localhost:11434/api/generate",
+        f"{OLLAMA_URL}/api/generate",
         json={
             "model":"llama3",
             "prompt":prompt,
@@ -90,16 +125,19 @@ def get_results(query , file_name , user_id = None):
         }
     )
 
-    result = {}
 
+    result = {
+        "response": response.json()["response"],
+        "metadata": []
+    }
 
-    result["response"] = response.json()["response"]
-    result["metadata"] = []
- 
+    unique_metadata = {
+        (m["filename"], m["page_num"])
+        for m in retrieved_metadata
+    }
 
-    unique_metadata = {(m["filename"], m["page_num"]) for m in retrieved_metadata}
-    for filename , page_num in unique_metadata:
+    for filename, page_num in unique_metadata:
         result["metadata"].append(f"{filename} page no:{page_num}")
-    
+
     return result
 

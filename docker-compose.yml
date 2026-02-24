@@ -1,0 +1,35 @@
+version: "3"
+services:
+  api:
+    build: .
+    ports:
+      - 8000:8000
+    depends_on:
+      - rag
+      - qdrant
+    environment:
+      - postgresql://postgres:pass@localhost:5432/rag
+
+  rag:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: rag
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_db:/var/lib/postgresql/data
+
+  qdrant:
+    image: qdrant/qdrant
+    ports:  
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  postgres_db:
+  qdrant_data:
+  

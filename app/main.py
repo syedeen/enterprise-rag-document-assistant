@@ -10,6 +10,8 @@ from app.rag_query import get_results
 from app.auth import get_pass_hash , verify_pass_hash , OAuth2PasswordRequestForm , create_access_token , get_current_user , TOKEN_EXPIRATION_DURATION
 from datetime import datetime , timezone , timedelta
 
+from app.vector_db import create_collection
+
 
 
 MAX_LOGIN_ATTEMPTS = 36
@@ -23,6 +25,11 @@ Base.metadata.create_all(bind=engine)
 BUCKET_NAME = "rag-fastapi"
 FOLDER_NAME = "pdfs/"
 
+
+@app.on_event("startup")
+def startup():
+    create_collection()
+    
 
 @app.get("/test")
 def get():    
