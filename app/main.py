@@ -21,13 +21,13 @@ s3 = boto3.client("s3")
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
 
-
+                                                      
 BUCKET_NAME = "rag-fastapi"
 FOLDER_NAME = "pdfs/"
 
 
 @app.on_event("startup")
-def startup():
+def startup():  
     create_collection()
     
 

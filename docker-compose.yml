@@ -4,12 +4,13 @@ services:
     build: .
     ports:
       - 8000:8000
+    env_file:
+      - .env
     depends_on:
-      - rag
-      - qdrant
-    environment:
-      - postgresql://postgres:pass@localhost:5432/rag
-
+      rag:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
   rag:
     image: postgres:15
     restart: always
@@ -21,6 +22,11 @@ services:
       - "5433:5432"
     volumes:
       - postgres_db:/var/lib/postgresql/data
+    healthcheck:                                        
+      test: ["CMD-SHELL", "pg_isready -U postgres"]  
+      interval: 5s                                     
+      timeout: 5s                                     
+      retries: 5   
 
   qdrant:
     image: qdrant/qdrant
