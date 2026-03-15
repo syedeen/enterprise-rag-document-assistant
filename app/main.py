@@ -1,15 +1,14 @@
 from fastapi import FastAPI , File , UploadFile , HTTPException , status , Depends
 from sqlalchemy.orm import Session 
-from sqlalchemy import select , or_ , and_
+from sqlalchemy import select , or_ , and_ , delete
 from app.database import Base , engine , get_db
-from app.model import Files , User
-from app.schema import FileResponse, QueryCreate , UserCreate , Token , UserResponse
+from app.model import Files , User , User_Files
+from app.schema import FileResponse, QueryCreate , UserCreate , Token , UserResponse , FileDelete
 import boto3
-from app.rag_test import save_file
+from app.rag_test import save_file , delete_embeddings
 from app.rag_query import get_results
 from app.auth import get_pass_hash , verify_pass_hash , OAuth2PasswordRequestForm , create_access_token , get_current_user , TOKEN_EXPIRATION_DURATION
 from datetime import datetime , timezone , timedelta
-
 from app.vector_db import create_collection
 
 
@@ -35,6 +34,7 @@ def startup():
 def get():    
     return "reached server"
 
+##upload file
 @app.post("/uploadfile/" , response_model=FileResponse)
 async def create_upload_file(file: UploadFile , db:Session = Depends(get_db) ,user : User = Depends(get_current_user)):
     if file.content_type != "application/pdf":
@@ -67,6 +67,15 @@ async def create_upload_file(file: UploadFile , db:Session = Depends(get_db) ,us
     db.commit()
     db.refresh(new_file)
 
+    new_user_file = User_Files(
+        user_id =  new_file.user_id,
+        file_id  = new_file.file_id
+    )
+
+    db.add(new_user_file)
+    db.commit()
+    db.refresh(new_user_file)
+
     url = s3.generate_presigned_url(
         'get_object',
         Params={
@@ -79,12 +88,19 @@ async def create_upload_file(file: UploadFile , db:Session = Depends(get_db) ,us
     return {"file_id":new_file.file_id,"file_url":url,"file_name":file.filename}
 
 
-
+##query 
 @app.post("/query")
-def query(query:QueryCreate , user:User = Depends(get_current_user)):
+def query(query:QueryCreate , user:User = Depends(get_current_user) , db:Session = Depends(get_db)):
+    stmt = select(Files).where(Files.file_name == query.file_name).where(user.user_id == Files.user_id)
+    file = db.scalars(stmt).all()
+    if not file:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN , detail="file not found"
+        )
     return get_results(query.query , query.file_name , user.user_id)
 
 
+##register user
 @app.post("/users/register" , response_model=UserResponse)
 def register(user:UserCreate , db:Session= Depends(get_db)):
     stmt1 = select(User).where(User.username == user.username)
@@ -117,7 +133,7 @@ def register(user:UserCreate , db:Session= Depends(get_db)):
     }
 
 
-
+##login 
 @app.post("/users/login" ,response_model=Token )
 def login_user(form_data:OAuth2PasswordRequestForm = Depends(), db:Session = Depends(get_db)):
 
@@ -183,6 +199,49 @@ def login_user(form_data:OAuth2PasswordRequestForm = Depends(), db:Session = Dep
 
 
 
+#get documents 
+@app.get("/users/docs")
+def get_users_documents(user : User = Depends(get_current_user) , db:Session=Depends(get_db)):
+    stmt = (
+        select(Files)
+        .join(User_Files,Files.file_id == User_Files.file_id)
+    )
+
+    files = db.scalars(stmt).all()
+    users_files = [file.file_name for file in files]
+    return users_files
+
+
+@app.delete("/users/documents/delete")
+def delete_documents( file:FileDelete ,user:User = Depends(get_current_user) , db:Session = Depends(get_db)):
+    #verify user
+    stmt = select(Files).where(Files.file_name == file.filename).where(user.user_id == Files.user_id)
+    file = db.scalars(stmt).first()
+    if not file:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN , detail="file not found")
+
+    #deleting file from aws
+    s3key = f"{FOLDER_NAME}{file.file_name}"
+    s3.delete_object(Bucket = BUCKET_NAME , Key = s3key)    
+
+    #deleting embeddings from qdrant
+    delete_embeddings(file,user.user_id)
+
+    #delete  from postgres
+    db.execute(delete(User_Files).where(User_Files.file_id == file.file_id))
+    db.execute(delete(Files).where(Files.file_id == file.file_id))
+    db.commit()
+
+    return {"deleted":f"{file.file_name} ,  successfully"}
+
+
+
+
+
+
+
+
+
 #get user
 @app.get("/users/me")
 def get_current_user_info(current_user : User = Depends(get_current_user)):
@@ -190,7 +249,6 @@ def get_current_user_info(current_user : User = Depends(get_current_user)):
 
     
 
-    
 
 
 

@@ -20,6 +20,12 @@ class UserCreate(BaseModel):
     email:EmailStr
     password:str
 
+
+class FileDelete(BaseModel):
+    filename:str
+    
+
+
 class UserResponse(BaseModel):
     username: str
     email: EmailStr

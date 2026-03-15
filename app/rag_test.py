@@ -3,6 +3,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from qdrant_client.models import PointStruct
 from app.vector_db import client
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 import uuid
 
@@ -74,7 +75,16 @@ def save_file(file , user_id):
     return {"message": "File indexed"}
 
 
-
+def delete_embeddings(file,user_id):
+    client.delete(
+        collection_name="rag_test",
+        points_selector=Filter(
+            must=[
+                FieldCondition(key="filename", match = MatchValue(value=file.file_name)),
+                FieldCondition(key="user_id", match = MatchValue(value=user_id))
+            ]
+        )
+    )
 
 
 

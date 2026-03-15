@@ -12,7 +12,7 @@ def get_results(query , file_name , user_id = None):
 
 
     #query
-    embedding_query = embedding_model.encode([query])[0] #wrapped in a list cause faiss expects embeddings as a 2d array 
+    embedding_query = embedding_model.encode([query])[0] 
 
     results = client.query_points(
         collection_name="rag_test",
