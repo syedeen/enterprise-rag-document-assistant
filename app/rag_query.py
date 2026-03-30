@@ -7,7 +7,12 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 from sentence_transformers import CrossEncoder
 reranker =  CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 import os
+from groq import Groq
 OLLAMA_URL = os.getenv("OLLAMA_URL")
+
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+
 def get_results(query , file_name , user_id = None):
 
 
@@ -105,7 +110,7 @@ def get_results(query , file_name , user_id = None):
 
     context = "\n\n".join(retrieved_chunks)
 
-    #llm (ollama)   
+    #llm (ollama)   changed to groq
     prompt = f"""You are a helpful assistant.   
     Use ONLY the information provided in the context below.
     If the answer is not in the context, say:
@@ -115,19 +120,25 @@ def get_results(query , file_name , user_id = None):
     Context :{context}  
     question :{query}"""
 
+    #ollama
+    # response = requests.post(
+    #     f"{OLLAMA_URL}/api/generate",
+    #     json={
+    #         "model":"llama3",
+    #         "prompt":prompt,
+    #         "stream":False
+    #     }
+    # )
 
-    response = requests.post(
-        f"{OLLAMA_URL}/api/generate",
-        json={
-            "model":"llama3",
-            "prompt":prompt,
-            "stream":False
-        }
+    #groq
+    response = groq_client.chat.completions.create(
+         model = "llama3-8b-8192",
+         messages=[{"role": "user", "content": prompt}]
     )
 
 
     result = {
-        "response": response.json()["response"],
+        "response": response.choices[0].message.content,
         "metadata": []
     }
 

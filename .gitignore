@@ -2,3 +2,4 @@ env-1/
 __pycache__/
 *.pyc
 .env
+qdrant_data/
